@@ -7,11 +7,17 @@ import { FileEditor } from './file-editor';
 import './workspace.css';
 import './monitor-dashboard.css';
 import { icon, actionIcon, decorateIcons } from './icons';
+import { initGroups } from './connection-groups';
+import './connection-groups.css';
 import { initUsers } from './users';
 import './connections.css';
 import './navigation.css';
+import './connection-dialog.css';
 
 const el = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
+const connectionDialog = el<HTMLDialogElement>('connection-dialog');
+let editingConnectionId: number | null = null;
+let connectionAttempt = false;
 const form = el<HTMLFormElement>('connection-form');
 const connect = el<HTMLButtonElement>('connect');
 const disconnect = el<HTMLButtonElement>('disconnect');
@@ -42,10 +48,10 @@ let keyMode = false;
 let savedKeyId: number | null = null;
 
 type SavedConnection = {
-  id: number; has_key: boolean; name: string; host: string; port: number; username: string; auth_method: 'password' | 'key';
+  id: number; group: number | null; has_key: boolean; name: string; host: string; port: number; username: string; auth_method: 'password' | 'key';
 };
 const csrf = el<HTMLInputElement>('connection-form').querySelector<HTMLInputElement>('[name=csrfmiddlewaretoken]')!.value;
-const localServer = JSON.parse(el('local-ssh-config').textContent || '{}');
+
 
 async function api(path: string, method = 'GET', body?: unknown) {
   const response = await fetch(path, {
@@ -58,9 +64,27 @@ async function api(path: string, method = 'GET', body?: unknown) {
   }
   return response.json();
 }
-function fillConnection(connection: { host: string; port: number; username: string; auth_method?: string; name?: string; id?: number; has_key?: boolean }) {
+function openConnectionDialog(edit = false) {
+  el('connection-dialog-title').textContent = editingConnectionId ? (edit ? 'Изменить подключение' : 'Подключение к серверу') : 'Новое подключение';
+  el<HTMLDetailsElement>('bookmark-options').open = edit;
+  actionIcon(el('save-bookmark'), 'save', editingConnectionId ? 'Сохранить изменения' : 'Сохранить подключение');
+  el('connection-message').textContent = '';
+  connectionDialog.showModal();
+}
+function closeConnectionDialog() {
   if (saving) return;
-  if (active.connected || active.busy) newSession();
+  if (connectionAttempt && active.busy) { active.pending = null; active.busy = false; active.socket?.close(); render(); }
+  password.value = ''; key.value = ''; connectionAttempt = false;
+  connectionDialog.close();
+}
+el('connection-dialog-close').onclick = closeConnectionDialog;
+connectionDialog.addEventListener('cancel', event => { event.preventDefault(); closeConnectionDialog(); });
+function fillConnection(connection: { host: string; port: number; username: string; auth_method?: string; name?: string; id?: number; has_key?: boolean; group?: number | null }, edit = false) {
+  if (saving) return;
+  el<HTMLSelectElement>('connection-group').value = String(connection.group || '');
+  editingConnectionId = connection.id || null;
+  el<HTMLInputElement>('remove-key').checked = false;
+  el('remove-key-option').hidden = !connection.has_key;
   el<HTMLInputElement>('host').value = connection.host;
   el<HTMLInputElement>('port').value = String(connection.port);
   el<HTMLInputElement>('username').value = connection.username;
@@ -76,6 +100,7 @@ function fillConnection(connection: { host: string; port: number; username: stri
   el('saved-key-status').textContent = savedKeyId ? 'Ключ сохранён. Для замены в текущем сеансе выберите другой файл.' : '';
   el('key-name').textContent = savedKeyId ? 'Используется сохранённый ключ' : 'Выберите приватный ключ';
   setMode(connection.auth_method === 'key');
+  openConnectionDialog(edit);
   message(savedKeyId ? 'Сервер выбран. Используется сохранённый ключ; укажите парольную фразу, если нужна.' : 'Сервер выбран. Укажите SSH-пароль или приватный ключ.');
   (connection.username ? password : el<HTMLInputElement>('username')).focus();
 }
@@ -86,21 +111,27 @@ function filterBookmarks() {
     row.hidden = !row.dataset.search!.includes(query);
     if (!row.hidden) found++;
   });
+  document.querySelectorAll<HTMLDetailsElement>('.connection-group').forEach(group => {
+    const visible = Array.from(group.querySelectorAll<HTMLElement>('.bookmark-row')).filter(row => !row.hidden).length;
+    group.hidden = !!query && !visible;
+    if (query && visible) group.open = true;
+    group.querySelector('.group-count')!.textContent = String(visible);
+  });
   const empty = document.getElementById('bookmark-search-empty');
   if (empty) empty.hidden = found > 0 || !query;
 }
 el('bookmark-search').oninput = filterBookmarks;
 el('reset-connection').onclick = () => {
   if (saving) return;
-  if (active.connected || active.busy) newSession();
-  form.reset(); savedKeyId = null; password.type = 'password';
+  form.reset(); editingConnectionId = null; el('remove-key-option').hidden = true;
+  savedKeyId = null; password.type = 'password';
   el('toggle-password').textContent = 'Показать';
   el('toggle-password').setAttribute('aria-pressed', 'false');
   el('toggle-password').setAttribute('aria-label', 'Показать пароль');
   el('saved-key-status').textContent = '';
   el('key-name').textContent = 'Выберите приватный ключ';
   el<HTMLDetailsElement>('bookmark-options').open = false;
-  setMode(false); message('Новое подключение. Укажите адрес сервера и SSH-учётные данные.');
+  setMode(false); openConnectionDialog(); message('Новое подключение. Укажите адрес сервера и SSH-учётные данные.');
   el<HTMLInputElement>('host').focus();
 };
 el('toggle-password').onclick = () => {
@@ -109,10 +140,30 @@ el('toggle-password').onclick = () => {
   el('toggle-password').setAttribute('aria-label', visible ? 'Скрыть пароль' : 'Показать пароль');
   el('toggle-password').setAttribute('aria-pressed', String(visible));
 };
+let connectionGroups: { id: number; name: string }[] = [];
+const collapsedGroups = new Set<string>();
 async function loadBookmarks() {
-  const data = await api('/api/connections/');
+  const [data, groupData] = await Promise.all([api('/api/connections/'), api('/api/connection-groups/')]);
+  connectionGroups = groupData.groups;
+  const groupSelect = el<HTMLSelectElement>('connection-group');
+  const selected = groupSelect.value;
+  groupSelect.replaceChildren(new Option('Другие (без группы)', ''));
+  for (const group of connectionGroups) groupSelect.add(new Option(group.name, String(group.id)));
+  groupSelect.value = selected;
+  if (groupSelect.selectedIndex < 0) groupSelect.value = '';
   const list = el('bookmarks-list');
   list.replaceChildren();
+  const containers = new Map<number | null, HTMLElement>();
+  for (const group of [...connectionGroups, { id: null, name: 'Другие' }]) {
+    const section = document.createElement('details'); section.className = 'connection-group';
+    const key = String(group.id); section.open = !collapsedGroups.has(key);
+    const heading = document.createElement('summary');
+    const title = document.createElement('span'); title.textContent = group.name;
+    const count = document.createElement('span'); count.className = 'group-count';
+    heading.append(icon('folder-open'), title, count); section.append(heading);
+    section.addEventListener('toggle', () => { if (section.open) collapsedGroups.delete(key); else collapsedGroups.add(key); });
+    containers.set(group.id, section); list.append(section);
+  }
   if (!data.connections.length) {
     const empty = document.createElement('p');
     empty.className = 'hint';
@@ -130,7 +181,8 @@ async function loadBookmarks() {
     title.textContent = connection.name;
     const detail = document.createElement('span');
     detail.textContent = `${connection.username}@${connection.host}:${connection.port} · ${connection.auth_method === 'key' ? (connection.has_key ? 'сохранённый ключ' : 'ключ') : 'пароль'}`;
-    select.append(title, detail);
+    select.append(icon('plug'), title, detail);
+    select.setAttribute('aria-label', `Подключиться к ${connection.name}`);
     select.disabled = saving;
     select.onclick = () => fillConnection(connection);
     const remove = document.createElement('button');
@@ -144,8 +196,12 @@ async function loadBookmarks() {
       try { await api(`/api/connections/${connection.id}/`, 'DELETE'); await loadBookmarks(); }
       catch (error) { message((error as Error).message, true); remove.disabled = false; }
     };
-    row.append(select, remove);
-    list.append(row);
+    const edit = document.createElement('button'); edit.type = 'button'; edit.className = 'icon-button';
+    edit.append(icon('pencil')); edit.title = `Изменить ${connection.name}`; edit.setAttribute('aria-label', edit.title);
+    edit.onclick = () => fillConnection(connection, true);
+    select.title = `Подключиться к ${connection.name}`;
+    row.append(select, edit, remove);
+    (containers.get(connection.group) || containers.get(null))!.append(row);
   }
   const emptySearch = document.createElement('p'); emptySearch.id = 'bookmark-search-empty';
   emptySearch.className = 'hint'; emptySearch.textContent = 'Серверы не найдены.'; list.append(emptySearch);
@@ -158,7 +214,6 @@ for (const id of ['host', 'port', 'username']) {
     el('key-name').textContent = key.files?.[0]?.name || 'Выберите приватный ключ';
   });
 }
-el('local-server').onclick = () => fillConnection(localServer);
 el('save-bookmark').onclick = async () => {
   if (saving) return;
   const button = el<HTMLButtonElement>('save-bookmark');
@@ -172,13 +227,22 @@ el('save-bookmark').onclick = async () => {
     const file = key.files?.[0];
     if (saveKey && !file) throw new Error('Для сохранения ключа выберите файл приватного ключа.');
     if (saveKey && file && file.size > 65536) throw new Error('Размер ключа не должен превышать 64 КБ.');
-    await api('/api/connections/', 'POST', {
+    const saved = await api(editingConnectionId ? `/api/connections/${editingConnectionId}/` : '/api/connections/', editingConnectionId ? 'PATCH' : 'POST', {
+      group: Number(el<HTMLSelectElement>('connection-group').value) || null,
+      remove_key: el<HTMLInputElement>('remove-key').checked,
       name, host: el<HTMLInputElement>('host').value.trim(), port: Number(el<HTMLInputElement>('port').value),
       save_key: saveKey, ...(saveKey && file ? { key: await file.text() } : {}),
       username: el<HTMLInputElement>('username').value.trim(), auth_method: keyMode ? 'key' : 'password',
     });
+    editingConnectionId = saved.id;
+    savedKeyId = saved.has_key ? saved.id : null;
+    el<HTMLInputElement>('save-key').checked = false; el<HTMLInputElement>('remove-key').checked = false;
+    el('remove-key-option').hidden = !saved.has_key;
+    el('saved-key-status').textContent = saved.has_key ? 'Ключ сохранён зашифрованно.' : '';
+    el('key-name').textContent = saved.has_key ? 'Используется сохранённый ключ' : 'Выберите приватный ключ';
+    actionIcon(button, 'save', 'Сохранить изменения');
     await loadBookmarks();
-    message(saveKey ? 'Подключение и зашифрованный ключ сохранены. Парольная фраза не сохраняется.' : 'Подключение сохранено без ключа и пароля.');
+    message('Подключение сохранено. Можно подключиться сейчас или закрыть окно.');
   } catch (error) { message((error as Error).message, true); }
   finally { saving = false; button.disabled = false; }
 };
@@ -187,6 +251,10 @@ loadBookmarks().catch(error => message(error.message, true));
 function message(text: string, error = false) {
   el('message').textContent = text;
   el('message').classList.toggle('error', error);
+  if (connectionDialog.open) {
+    el('connection-message').textContent = text;
+    el('connection-message').classList.toggle('error', error);
+  }
 }
 function render() {
   el('session-tabs').replaceChildren();
@@ -207,6 +275,7 @@ function render() {
   }
   connect.disabled = active.busy;
   actionIcon(connect, 'plug', active.connected ? 'Подключить в новой вкладке' : 'Подключиться');
+  el<HTMLButtonElement>('save-bookmark').disabled = saving || (connectionAttempt && active.busy);
   disconnect.disabled = !active.connected;
   el('status').textContent = active.connected ? 'CONNECTED' : active.busy ? 'CONNECTING' : 'OFFLINE';
   el('status').classList.toggle('online', active.connected);
@@ -301,9 +370,14 @@ el('password-tab').onclick = () => setMode(false);
 el('key-tab').onclick = () => setMode(true);
 key.onchange = () => { el('key-name').textContent = key.files?.[0]?.name || 'Выберите приватный ключ'; };
 
+el<HTMLInputElement>('remove-key').onchange = () => {
+  if (el<HTMLInputElement>('remove-key').checked) savedKeyId = null;
+  else savedKeyId = null; // Reopen the saved entry to restore its key after changing fields.
+};
 form.onsubmit = async event => {
   event.preventDefault();
-  if (active.busy) return;
+  if (saving || active.busy) return;
+  connectionAttempt = true;
   const session = active.connected ? newSession() : active;
   session.busy = true;
   render();
@@ -317,7 +391,7 @@ form.onsubmit = async event => {
       ...(keyMode && !file && savedKeyId ? { saved_connection_id: savedKeyId } : {}),
       password: password.value, key: keyMode && file ? await file.text() : '',
       cols: session.terminal.cols, rows: session.terminal.rows };
-    if (!sessions.includes(session)) return;
+    if (!sessions.includes(session) || !connectionAttempt) { session.busy = false; render(); return; }
     session.pending = payload;
     password.value = '';
     password.type = 'password';
@@ -352,6 +426,8 @@ form.onsubmit = async event => {
         if (session.pending) session.pending.fingerprint = data.fingerprint;
         showVerification();
       } else if (data.type === 'connected') {
+        connectionAttempt = false;
+        if (connectionDialog.open) connectionDialog.close();
         session.pending = null; session.connected = true; session.busy = false;
         notice(session, 'Соединение установлено.');
         if (session === active) { resize(); session.terminal.focus(); if (sftpVisible) void listFiles(session); if (commandsVisible) void loadServices(session); if (monitorVisible) void refreshMonitor(); }
@@ -393,7 +469,7 @@ function reject() {
 el('reject-host').onclick = reject;
 dialog.addEventListener('cancel', event => { event.preventDefault(); reject(); });
 disconnect.onclick = () => send(active, { type: 'disconnect' });
-el('new-session').onclick = () => { newSession(); el('nav-connections').click(); setMenu(true); };
+el('new-session').onclick = () => { newSession(); el('nav-connections').click(); setMenu(true); el('reset-connection').click(); };
 function setMenu(open: boolean) {
   el('connection-menu').hidden = !open;
   el('toggle-menu').setAttribute('aria-expanded', String(open));
@@ -751,6 +827,7 @@ window.setInterval(() => { void refreshMonitor(); }, 5000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) void refreshMonitor(); });
 decorateIcons();
 initUsers(api);
+initGroups(api, loadBookmarks);
 for (const [id, name, label] of [
   ['toggle-menu', 'menu', 'Меню'], ['toggle-monitor', 'activity', 'Мониторинг'],
   ['toggle-commands', 'zap', 'Команды'], ['toggle-sftp', 'folder-open', 'SFTP'],

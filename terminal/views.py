@@ -1,7 +1,6 @@
 import json
 
 from django import forms
-from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import UserCreationForm
@@ -11,7 +10,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_http_methods
 
 from .key_storage import encrypt_key
-from .models import QuickCommand, SavedConnection
+from .models import ConnectionGroup, QuickCommand, SavedConnection
 
 
 class ApplicationUserForm(UserCreationForm):
@@ -92,30 +91,29 @@ def delete_quick_command(request, pk):
 class ConnectionForm(forms.ModelForm):
     class Meta:
         model = SavedConnection
-        fields = ["name", "host", "port", "username", "auth_method"]
+        fields = ["name", "host", "port", "username", "auth_method", "group"]
+
+    def __init__(self, *args, owner, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["group"].queryset = ConnectionGroup.objects.filter(owner=owner)
 
 
 def serialize(connection):
     return {
         "id": connection.pk,
         "has_key": bool(connection.encrypted_key),
-        **{field: getattr(connection, field) for field in ConnectionForm.Meta.fields},
+        **{
+            field: getattr(connection, field)
+            for field in ConnectionForm.Meta.fields
+            if field != "group"
+        },
+        "group": connection.group_id,
     }
 
 
 @login_required
 def terminal_page(request):
-    return render(
-        request,
-        "terminal.html",
-        {
-            "local_ssh": {
-                "host": settings.LOCAL_SSH_HOST,
-                "port": settings.LOCAL_SSH_PORT,
-                "username": settings.LOCAL_SSH_USERNAME,
-            }
-        },
-    )
+    return render(request, "terminal.html")
 
 
 @login_required
@@ -135,7 +133,7 @@ def connections(request):
         return JsonResponse({"error": "Некорректный JSON."}, status=400)
     if not isinstance(data, dict):
         return JsonResponse({"error": "Ожидается объект."}, status=400)
-    form = ConnectionForm(data)
+    form = ConnectionForm(data, owner=request.user)
     if not form.is_valid():
         return JsonResponse(
             {"error": "Проверьте поля закладки.", "fields": form.errors}, status=400
@@ -156,8 +154,32 @@ def connections(request):
 
 
 @login_required
-@require_http_methods(["DELETE"])
+@require_http_methods(["PATCH", "DELETE"])
 def delete_connection(request, pk):
     connection = get_object_or_404(SavedConnection, pk=pk, owner=request.user)
+    if request.method == "PATCH":
+        try:
+            data = json.loads(request.body)
+        except (ValueError, UnicodeDecodeError):
+            return JsonResponse({"error": "Некорректный JSON."}, status=400)
+        if not isinstance(data, dict):
+            return JsonResponse({"error": "Ожидается объект."}, status=400)
+        form = ConnectionForm(data, instance=connection, owner=request.user)
+        if not form.is_valid():
+            return JsonResponse(
+                {"error": "Проверьте поля подключения.", "fields": form.errors}, status=400
+            )
+        connection = form.save(commit=False)
+        if connection.auth_method != "key" or data.get("remove_key") is True:
+            connection.encrypted_key = ""
+        if data.get("save_key") is True:
+            if connection.auth_method != "key":
+                return JsonResponse({"error": "Выберите вход по SSH-ключу."}, status=400)
+            try:
+                connection.encrypted_key = encrypt_key(data.get("key"))
+            except ValueError as exc:
+                return JsonResponse({"error": str(exc)}, status=400)
+        connection.save()
+        return JsonResponse(serialize(connection))
     connection.delete()
     return JsonResponse({"deleted": True})

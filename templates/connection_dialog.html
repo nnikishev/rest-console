@@ -1,0 +1,16 @@
+<dialog id="connection-dialog" aria-labelledby="connection-dialog-title">
+<div class="user-dialog-header"><div><div class="eyebrow">SSH CONNECTION</div><h2 id="connection-dialog-title">Новое подключение</h2></div><button id="connection-dialog-close" type="button" class="icon-button" aria-label="Закрыть"><i data-lucide="x"></i></button></div>
+<p class="hint" id="connection-dialog-hint">Подключитесь разово или сохраните сервер для быстрого доступа.</p>
+<form id="connection-form">
+{% csrf_token %}
+<div class="connection-step"><span>01</span><div><h3>Сервер</h3><p>Адрес и учётная запись Linux</p></div></div>
+<label for="host">Адрес сервера</label><input id="host" name="host" placeholder="IP-адрес или hostname" required autocomplete="off">
+<div class="connection-fields"><div><label for="port">SSH-порт</label><input id="port" name="port" type="number" min="1" max="65535" value="22" required></div><div><label for="username">SSH-пользователь</label><input id="username" name="username" placeholder="deploy" required autocomplete="off"></div></div>
+<div class="connection-step"><span>02</span><div><h3>Способ входа</h3><p>Пароли и парольные фразы не сохраняются</p></div></div>
+<div class="tabs" role="group" aria-label="Способ входа"><button type="button" class="tab active" id="password-tab" aria-pressed="true">Пароль</button><button type="button" class="tab" id="key-tab" aria-pressed="false">SSH-ключ</button></div>
+<div id="key-fields" hidden><label class="upload" for="key">↥ <span id="key-name">Выберите приватный ключ</span><input id="key" type="file" hidden></label><p class="hint">OpenSSH / PEM · до 64 КБ</p><label class="save-key-option"><input id="save-key" type="checkbox"> Сохранить выбранный ключ зашифрованно</label><p class="hint" id="saved-key-status"></p><label id="remove-key-option" class="save-key-option" hidden><input id="remove-key" type="checkbox"> Удалить сохранённый ключ</label></div>
+<label for="password" id="password-label">Пароль</label><div class="password-control"><input id="password" type="password" autocomplete="off" placeholder="Введите пароль"><button id="toggle-password" type="button" class="quiet" aria-label="Показать пароль" aria-pressed="false">Показать</button></div>
+<details id="bookmark-options" class="bookmark-options"><summary>Настройки сохранённого подключения</summary><label for="connection-group">Группа</label><select id="connection-group"><option value="">Другие (без группы)</option></select><p class="hint">Группы настраиваются в меню подключений.</p><label for="bookmark-name">Название сервера</label><input id="bookmark-name" maxlength="100" placeholder="Например, Production"><p class="hint">Сохранение не требует подключения к серверу.</p><button id="save-bookmark" class="secondary" type="button">Сохранить подключение</button></details>
+<p id="connection-message" class="message" role="status" aria-live="polite"></p>
+<div class="connection-actions"><button id="connect" class="primary" type="submit">Подключиться</button></div>
+</form></dialog>

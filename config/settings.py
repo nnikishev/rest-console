@@ -66,9 +66,6 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 SSH_KEY_ENCRYPTION_KEY = os.environ.get(
     "SSH_KEY_ENCRYPTION_KEY", "7Kyce_bPmSqiBdCjOdoDD8Lj3_LLMmidzDhLEq11-1A="
 )
-LOCAL_SSH_HOST = os.environ.get("LOCAL_SSH_HOST", "127.0.0.1")
-LOCAL_SSH_PORT = int(os.environ.get("LOCAL_SSH_PORT", "22"))
-LOCAL_SSH_USERNAME = os.environ.get("LOCAL_SSH_USERNAME", "")
 SSH_ALLOWED_HOSTS = [
     h.strip() for h in os.environ.get("SSH_ALLOWED_HOSTS", "").split(",") if h.strip()
 ]

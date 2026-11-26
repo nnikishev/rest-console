@@ -2,9 +2,12 @@ from django.contrib.auth import views as auth_views
 from django.urls import path
 
 from terminal import views
+from terminal.connection_groups import groups
 from terminal.user_management import users
 
 urlpatterns = [
+    path("api/connection-groups/", groups),
+    path("api/connection-groups/<int:pk>/", groups),
     path("api/users/", users),
     path("api/users/<int:pk>/", users),
     path("users/new/", views.create_user),

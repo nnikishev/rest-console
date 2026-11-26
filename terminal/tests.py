@@ -1,7 +1,7 @@
 import json
 
 from django.contrib.auth import get_user_model
-from django.test import Client, TestCase, override_settings
+from django.test import Client, TestCase
 
 from .models import SavedConnection
 
@@ -59,15 +59,7 @@ class ConnectionTests(TestCase):
         client.force_login(self.user)
         self.assertEqual(client.post("/api/connections/", self.payload).status_code, 403)
 
-    @override_settings(LOCAL_SSH_HOST="127.0.0.1", LOCAL_SSH_PORT=2222, LOCAL_SSH_USERNAME="local")
-    def test_local_server_configuration(self):
+    def test_connection_page_has_groups(self):
         response = self.client.get("/")
-        self.assertEqual(
-            response.context["local_ssh"],
-            {
-                "host": "127.0.0.1",
-                "port": 2222,
-                "username": "local",
-            },
-        )
-        self.assertContains(response, 'id="local-server"')
+        self.assertContains(response, 'id="manage-groups"')
+        self.assertContains(response, 'id="connection-group"')
