@@ -12,6 +12,7 @@ from django.conf import settings
 
 from .key_storage import decrypt_key
 from .models import SavedConnection
+from .monitoring import snapshot
 from .sftp import operate
 
 
@@ -63,6 +64,29 @@ class TerminalConsumer(AsyncJsonWebsocketConsumer):
             elif kind == "resize" and self.channel:
                 cols, rows = self.dimensions(content)
                 await asyncio.to_thread(self.channel.resize_pty, width=cols, height=rows)
+            elif kind == "monitor":
+                try:
+                    if not self.client or not self.channel:
+                        raise ValueError("Сначала подключитесь к SSH.")
+                    result = await asyncio.to_thread(snapshot, self.client)
+                    await self.send_json(
+                        {"type": "monitor", "id": content.get("id"), "result": result}
+                    )
+                except (
+                    ValueError,
+                    OSError,
+                    EOFError,
+                    paramiko.SSHException,
+                    StopIteration,
+                    IndexError,
+                ):
+                    await self.send_json(
+                        {
+                            "type": "monitor",
+                            "id": content.get("id"),
+                            "error": "Не удалось собрать метрики. Нужны Linux /proc, df и разрешение SSH exec; lsblk необязателен.",
+                        }
+                    )
             elif kind == "sftp":
                 try:
                     if not self.client or not self.channel:

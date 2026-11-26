@@ -2,8 +2,10 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import './style.css';
+import { clearHistory, renderDashboard } from './monitor-dashboard';
 import { FileEditor } from './file-editor';
 import './workspace.css';
+import './monitor-dashboard.css';
 
 const el = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
 const form = el<HTMLFormElement>('connection-form');
@@ -26,6 +28,9 @@ let nextRequest = 0;
 let verifying: Session | null = null;
 let sftpVisible = false;
 let commandsVisible = false;
+let monitorVisible = false;
+const monitorSamples = new Map<number, { cpu_total: number; cpu_idle: number }>();
+const monitorBusy = new Set<number>();
 type QuickCommand = { id?: number; category: string; name: string; command: string };
 let customCommands: QuickCommand[] = [];
 let saving = false;
@@ -182,6 +187,7 @@ function activate(session: Session) {
   render();
   renderFiles();
   renderCommands();
+  if (monitorVisible) { el('monitor-metrics').replaceChildren(); void refreshMonitor(); }
   if (commandsVisible && session.connected && !session.servicesLoaded) void loadServices(session);
   if (sftpVisible && session.connected) void listFiles(session);
   requestAnimationFrame(() => { resize(); active.terminal.focus(); });
@@ -214,6 +220,8 @@ function clearRequests(session: Session) {
 function closeSession(session: Session) {
   if ((session.connected || session.busy) && !confirm('Закрыть вкладку и завершить SSH-сессию?')) return;
   if (verifying === session) { verifying = null; dialog.close(); }
+  monitorSamples.delete(session.id);
+  clearHistory(session.id);
   session.pending = null;
   session.socket?.close();
   clearRequests(session);
@@ -279,6 +287,8 @@ form.onsubmit = async event => {
     session.terminal.reset();
     session.hasOutput = false;
     session.files = []; session.path = '.';
+    monitorSamples.delete(session.id);
+  clearHistory(session.id);
     session.services = []; session.servicesLoaded = false;
     renderFiles();
     notice(session, 'Устанавливаем защищённое соединение…');
@@ -286,7 +296,7 @@ form.onsubmit = async event => {
     ws.onmessage = event => {
       if (session.socket !== ws || !sessions.includes(session)) return;
       const data = JSON.parse(event.data);
-      if (data.type === 'sftp') {
+      if (data.type === 'sftp' || data.type === 'monitor') {
         const request = session.requests.get(data.id);
         if (request) {
           clearTimeout(request.timer); session.requests.delete(data.id);
@@ -298,7 +308,7 @@ form.onsubmit = async event => {
       } else if (data.type === 'connected') {
         session.pending = null; session.connected = true; session.busy = false;
         notice(session, 'Соединение установлено.');
-        if (session === active) { resize(); session.terminal.focus(); if (sftpVisible) void listFiles(session); if (commandsVisible) void loadServices(session); }
+        if (session === active) { resize(); session.terminal.focus(); if (sftpVisible) void listFiles(session); if (commandsVisible) void loadServices(session); if (monitorVisible) void refreshMonitor(); }
       } else if (data.type === 'output') {
         session.hasOutput = true;
         session.terminal.write(data.data);
@@ -346,13 +356,13 @@ function setMenu(open: boolean) {
 }
 el('toggle-menu').onclick = () => setMenu(el('connection-menu').hidden);
 
-function sftpRequest(session: Session, data: Record<string, unknown>): Promise<any> {
+function sftpRequest(session: Session, data: Record<string, unknown>, type = 'sftp'): Promise<any> {
   return new Promise((resolve, reject) => {
     if (!session.connected) { reject(new Error('Сначала подключитесь к SSH.')); return; }
     const id = ++nextRequest;
     const timer = window.setTimeout(() => { session.requests.delete(id); reject(new Error('Тайм-аут SFTP.')); }, 60000);
     session.requests.set(id, { resolve, reject, timer });
-    send(session, { type: 'sftp', id, ...data });
+    send(session, { type, id, ...data });
   });
 }
 function sftpMessage(session: Session, text: string) {
@@ -516,6 +526,7 @@ function renderFiles() {
 el('toggle-sftp').onclick = () => {
   sftpVisible = !sftpVisible;
   if (sftpVisible) {
+    hideMonitor();
     commandsVisible = false; el('commands-panel').hidden = true;
     el('toggle-commands').setAttribute('aria-expanded', 'false');
   }
@@ -630,6 +641,7 @@ el('toggle-commands').onclick = () => {
   el('commands-panel').hidden = !commandsVisible;
   el('toggle-commands').setAttribute('aria-expanded', String(commandsVisible));
   if (commandsVisible) {
+    hideMonitor();
     sftpVisible = false; el('sftp-panel').hidden = true;
     el('toggle-sftp').setAttribute('aria-expanded', 'false');
     renderCommands();
@@ -651,6 +663,45 @@ el<HTMLFormElement>('command-form').onsubmit = async event => {
   } catch (error) { commandsMessage(active, (error as Error).message); }
   finally { button.disabled = false; }
 };
+function hideMonitor() {
+  monitorVisible = false; el('monitor-panel').hidden = true;
+  el('toggle-monitor').setAttribute('aria-expanded', 'false');
+}
+async function refreshMonitor() {
+  const session = active;
+  if (!monitorVisible || document.hidden || monitorBusy.has(session.id)) return;
+  if (!session.connected) {
+    el('monitor-message').textContent = 'Подключитесь к SSH для просмотра метрик.';
+    el('monitor-metrics').replaceChildren(); return;
+  }
+  monitorBusy.add(session.id);
+  el('monitor-message').textContent = 'Обновление…';
+  try {
+    const data = await sftpRequest(session, {}, 'monitor');
+    if (!sessions.includes(session)) return;
+    const previous = monitorSamples.get(session.id);
+    monitorSamples.set(session.id, data);
+    if (!monitorVisible || active !== session) return;
+    renderDashboard(el('monitor-metrics'), session.id, data, previous);
+    el('monitor-message').textContent = `Обновлено ${new Date().toLocaleTimeString()} · LA сравнивайте с числом ядер. SMART не проверяется.`;
+  } catch (error) {
+    if (monitorVisible && session === active) el('monitor-message').textContent = (error as Error).message;
+  } finally { monitorBusy.delete(session.id); }
+}
+el('toggle-monitor').onclick = () => {
+  if (monitorVisible) hideMonitor();
+  else {
+    monitorVisible = true; el('monitor-panel').hidden = false;
+    el('toggle-monitor').setAttribute('aria-expanded', 'true');
+    commandsVisible = false; el('commands-panel').hidden = true; el('toggle-commands').setAttribute('aria-expanded', 'false');
+    sftpVisible = false; el('sftp-panel').hidden = true; el('toggle-sftp').setAttribute('aria-expanded', 'false');
+    void refreshMonitor();
+  }
+  requestAnimationFrame(resize);
+};
+el('refresh-monitor').onclick = () => { void refreshMonitor(); };
+window.setInterval(() => { void refreshMonitor(); }, 5000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) void refreshMonitor(); });
 newSession();
 loadCommands().catch(error => commandsMessage(active, error.message));
 new ResizeObserver(resize).observe(el('terminal'));
