@@ -2,6 +2,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import './style.css';
+import { FileEditor } from './file-editor';
 import './workspace.css';
 
 const el = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
@@ -369,24 +370,105 @@ async function listFiles(session: Session, path = session.path) {
 function joinPath(path: string, name: string) { return `${path.replace(/\/$/, '')}/${name}`; }
 let previewVersion = 0;
 const previewDialog = el<HTMLDialogElement>('preview-dialog');
-el('preview-close').onclick = () => previewDialog.close();
+const editor = new FileEditor(el('preview-content'));
+const saveFileButton = el<HTMLButtonElement>('preview-save');
+let editing: { session: Session; path: string; revision: string; original: string; crlf: boolean } | null = null;
+let fileSaving = false;
+function editorDirty() { return editing !== null && editor.value !== editing.original; }
+function updateEditor() {
+  saveFileButton.disabled = fileSaving || editor.readOnly || !editorDirty();
+  const position = editor.position;
+  el('editor-position').textContent = `Строка ${position.line}, столбец ${position.column} · Всего строк: ${editor.lines}${editorDirty() ? ' · Есть изменения' : ''}`;
+  el<HTMLInputElement>('editor-line').max = String(editor.lines);
+}
+function closeEditor() {
+  if (fileSaving) return;
+  if (editorDirty() && !confirm('Закрыть файл без сохранения изменений?')) return;
+  previewDialog.close();
+}
+el('preview-close').onclick = closeEditor;
+previewDialog.addEventListener('cancel', event => { event.preventDefault(); closeEditor(); });
 previewDialog.addEventListener('close', () => {
-  previewVersion++;
-  el('preview-content').textContent = '';
+  previewVersion++; editing = null; editor.value = ''; updateEditor();
+});
+function positionEditor() {
+  if (!previewDialog.open) return;
+  const rect = document.querySelector('.terminal-panel')!.getBoundingClientRect();
+  Object.assign(previewDialog.style, { left: `${rect.left}px`, top: `${rect.top}px`, width: `${rect.width}px`, height: `${rect.height}px` });
+}
+new ResizeObserver(positionEditor).observe(document.querySelector('.terminal-panel')!);
+window.addEventListener('resize', positionEditor);
+el('preview-wrap').onclick = () => {
+  const wrap = editor.wrap === 'off'; editor.wrap = wrap ? 'soft' : 'off';
+  el('preview-wrap').setAttribute('aria-pressed', String(wrap));
+};
+editor.oninput = updateEditor;
+editor.onclick = updateEditor;
+editor.onkeyup = updateEditor;
+editor.onkeydown = event => {
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+    event.preventDefault(); void saveEditedFile();
+  } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'g') {
+    event.preventDefault();
+    el<HTMLInputElement>('editor-line').focus(); el<HTMLInputElement>('editor-line').select();
+  } else if (event.key === 'Tab' && !editor.readOnly) {
+    event.preventDefault();
+    editor.setRangeText('  ', editor.selectionStart, editor.selectionEnd, 'end'); updateEditor();
+  }
+};
+async function saveEditedFile() {
+  const target = editing;
+  if (!target || saveFileButton.disabled) return;
+  if (!confirm(`Сохранить изменения на ${target.session.title}?\n${target.path}`)) return;
+  fileSaving = true; editor.readOnly = true; updateEditor();
+  const value = editor.value;
+  el('preview-note').textContent = 'Сохранение…';
+  try {
+    const text = target.crlf ? value.replace(/\n/g, '\r\n') : value;
+    const result = await sftpRequest(target.session, { action: 'save', path: target.path, revision: target.revision, text });
+    target.revision = result.revision; target.original = value;
+    el('preview-note').textContent = 'Сохранено на сервере · UTF-8';
+  } catch (error) { el('preview-note').textContent = (error as Error).message; }
+  finally { fileSaving = false; editor.readOnly = false; updateEditor(); }
+}
+el<HTMLFormElement>('editor-goto').onsubmit = event => {
+  event.preventDefault();
+  const input = el<HTMLInputElement>('editor-line');
+  if (input.reportValidity()) editor.goToLine(Number(input.value));
+};
+saveFileButton.onclick = () => { void saveEditedFile(); };
+window.addEventListener('beforeunload', event => {
+  if (editorDirty() || fileSaving) { event.preventDefault(); event.returnValue = ''; }
 });
 async function previewFile(session: Session, path: string) {
+  if (fileSaving || (editorDirty() && !confirm('Открыть другой файл без сохранения изменений?'))) return;
   const version = ++previewVersion;
-  el('preview-title').textContent = path;
-  el('preview-content').textContent = '';
+  editing = null; editor.readOnly = true; editor.value = ''; updateEditor();
+  el('editor-language').textContent = editor.setLanguage(path);
+  el('preview-title').textContent = `${session.title} · ${path}`;
   el('preview-note').textContent = 'Загрузка…';
   if (!previewDialog.open) previewDialog.showModal();
+  positionEditor();
   try {
     const result = await sftpRequest(session, { action: 'preview', path });
     if (version !== previewVersion || !previewDialog.open) return;
     const bytes = Uint8Array.from(atob(result.content), char => char.charCodeAt(0));
-    const text = new TextDecoder('utf-8').decode(bytes);
-    el('preview-content').textContent = text;
-    el('preview-note').textContent = `Только чтение · UTF-8${result.truncated ? ' · Показаны первые 256 КиБ' : ''}${text.includes('\uFFFD') || text.includes('\0') ? ' · Возможен бинарный файл или другая кодировка' : ''}`;
+    let text: string;
+    let valid = true;
+    try { text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes); }
+    catch { text = new TextDecoder('utf-8').decode(bytes); valid = false; }
+    const binary = /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(text);
+    const crlf = text.includes('\r\n');
+    const mixedNewlines = /\r(?!\n)/.test(text) || (crlf && /(?<!\r)\n/.test(text));
+    editor.value = text;
+    if (valid && !binary && !result.truncated && !mixedNewlines && result.revision) {
+      editing = { session, path, revision: result.revision, original: editor.value, crlf };
+      editor.readOnly = false;
+      el('preview-note').textContent = 'Редактирование · UTF-8 · Сохранение на сервер: Ctrl+S';
+    } else {
+      el('preview-note').textContent = `Только чтение${result.truncated ? ` · Файл обрезан до ${Math.round(result.limit / 1024)} КиБ` : ''}${!valid || binary ? ' · Бинарный файл или кодировка не UTF-8' : ''}${mixedNewlines ? ' · Смешанные переводы строк' : ''}`;
+    }
+    updateEditor(); editor.focus();
   } catch (error) {
     if (version === previewVersion) el('preview-note').textContent = (error as Error).message;
   }

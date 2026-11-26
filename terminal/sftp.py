@@ -1,12 +1,15 @@
 import base64
 import binascii
+import hashlib
 import io
 import posixpath
 import re
 import stat
 import time
 import zipfile
+
 from config.settings import LIMIT, PREVIEW_LIMIT
+
 
 def directory_archive(sftp, path):
     output = io.BytesIO()
@@ -102,8 +105,39 @@ def operate(client, data):
             return {
                 "name": posixpath.basename(path),
                 "content": base64.b64encode(content[:PREVIEW_LIMIT]).decode("ascii"),
+                "revision": hashlib.sha256(content).hexdigest()
+                if len(content) <= PREVIEW_LIMIT
+                else None,
+                "limit": PREVIEW_LIMIT,
                 "truncated": len(content) > PREVIEW_LIMIT,
             }
+        if action == "save":
+            text = data.get("text")
+            revision = data.get("revision")
+            if not isinstance(text, str) or not isinstance(revision, str):
+                raise ValueError("Некорректные данные редактора.")
+            raw = text.encode("utf-8")
+            if len(raw) > PREVIEW_LIMIT or "\0" in text:
+                raise ValueError("Файл превышает лимит редактора или содержит бинарные данные.")
+            if not stat.S_ISREG(sftp.stat(path).st_mode):
+                raise ValueError("Редактировать можно только обычные файлы.")
+            with sftp.open(path, "r+b") as remote:
+                current = remote.read(PREVIEW_LIMIT + 1)
+                if len(current) > PREVIEW_LIMIT or hashlib.sha256(current).hexdigest() != revision:
+                    raise ValueError(
+                        "Файл изменился на сервере. Откройте его заново перед сохранением."
+                    )
+                try:
+                    current.decode("utf-8")
+                except UnicodeDecodeError:
+                    raise ValueError("Редактирование доступно только для UTF-8.") from None
+                if b"\0" in current:
+                    raise ValueError("Редактирование бинарных файлов запрещено.")
+                remote.seek(0)
+                remote.write(raw)
+                remote.truncate(len(raw))
+                remote.flush()
+            return {"revision": hashlib.sha256(raw).hexdigest(), "saved": True}
         if action == "download":
             with sftp.open(path, "rb") as remote:
                 if (remote.stat().st_size or 0) > LIMIT:

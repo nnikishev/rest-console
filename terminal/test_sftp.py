@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import io
 import stat
 import zipfile
@@ -44,6 +45,33 @@ class SftpTests(TestCase):
             ]
             with self.assertRaises(ValueError):
                 directory_archive(self.sftp, "/root")
+
+    def test_save_checks_revision_before_writing(self):
+        self.sftp.stat.return_value.st_mode = stat.S_IFREG
+        remote = self.sftp.open.return_value.__enter__.return_value
+        remote.read.return_value = b"old"
+        revision = hashlib.sha256(b"old").hexdigest()
+        result = operate(
+            self.client, {"action": "save", "path": "/tmp/a", "text": "new", "revision": revision}
+        )
+        self.assertEqual(result["revision"], hashlib.sha256(b"new").hexdigest())
+        remote.write.assert_called_once_with(b"new")
+        remote.truncate.assert_called_once_with(3)
+        remote.write.reset_mock()
+        with self.assertRaisesRegex(ValueError, "изменился"):
+            operate(
+                self.client,
+                {"action": "save", "path": "/tmp/a", "text": "oops", "revision": "stale"},
+            )
+        remote.write.assert_not_called()
+
+    def test_save_rejects_oversized_and_binary_content(self):
+        for text in ("a" * (PREVIEW_LIMIT + 1), "a\0b"):
+            with self.assertRaises(ValueError):
+                operate(
+                    self.client, {"action": "save", "path": "/tmp/a", "text": text, "revision": "x"}
+                )
+        self.sftp.open.assert_not_called()
 
     def test_list_normalizes_and_sorts(self):
         self.sftp.normalize.return_value = "/home/deploy"
