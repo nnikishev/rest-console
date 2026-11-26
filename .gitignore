@@ -1,0 +1,9 @@
+.venv/
+node_modules/
+frontend/dist/
+__pycache__/
+*.pyc
+db.sqlite3
+staticfiles/
+.env
+.ruff_cache

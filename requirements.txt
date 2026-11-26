@@ -1,0 +1,4 @@
+Django>=5.2,<5.3
+channels[daphne]>=4.2,<5
+paramiko>=3.5,<4
+cryptography>=43

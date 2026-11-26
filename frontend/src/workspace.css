@@ -1,0 +1,45 @@
+#commands-panel{display:flex;flex-direction:column;flex:0 0 350px;width:350px;min-height:0;min-width:0;padding:16px;border-left:1px solid #39443d;background:#1c241e;overflow:auto;overscroll-behavior:contain}#commands-panel h2{font-size:17px;margin:0}#commands-panel .hint{line-height:1.6;margin-bottom:0}#commands-message{min-height:0;margin:10px 0;overflow-wrap:anywhere}#commands-list{flex:1}.command-group{border-bottom:1px solid #39443d;padding:10px 0}.command-group summary,.command-editor summary{cursor:pointer;color:#b5ed89;font-size:13px}.command-row{display:flex;align-items:center;gap:6px;margin-top:8px;min-width:0}.command-run{flex:1;min-width:0;background:#263029;border:1px solid #39443d;border-radius:6px;text-align:left;padding:10px;color:#dbeadf}.command-run strong,.command-run code{display:block;overflow-wrap:anywhere;white-space:pre-wrap}.command-run strong{font-size:12px}.command-run code{font-size:10px;color:#96a59a;margin-top:6px}.command-editor{margin-top:18px;padding:12px 0;border-top:1px solid #39443d}@media(max-width:800px){#commands-panel{position:absolute;inset:0 0 0 auto;z-index:4;width:min(350px,95%);box-shadow:-12px 0 30px #0006}.session-toolbar{flex-wrap:wrap;flex-basis:auto;min-height:46px;padding-top:4px;padding-bottom:4px}#session-tabs{flex-basis:100%;height:36px;order:2}}
+.file-row{display:flex;align-items:center;gap:6px;border-bottom:1px solid #333c35;min-width:0}.file-row .file-entry{flex:1;min-width:0;border-bottom:0}.file-download{flex-shrink:0;font-size:10px;padding:10px 3px}#preview-dialog{width:min(960px,calc(100vw - 32px));max-width:960px;height:min(720px,calc(100dvh - 32px));max-height:calc(100dvh - 32px);padding:20px;overflow:hidden}#preview-dialog[open]{display:flex;flex-direction:column;gap:10px}.preview-toolbar{display:flex;align-items:center;gap:16px;min-width:0}.preview-toolbar h2{flex:1;min-width:0;overflow-wrap:anywhere;margin:0;font-size:15px;max-height:80px;overflow:auto}.preview-toolbar .secondary{width:auto;margin:0;flex-shrink:0}#preview-note{margin:0;flex-shrink:0}#preview-content{flex:1;min-height:0;overflow:auto;white-space:pre;tab-size:4;background:#111416;color:#dce3df;padding:14px;margin:0;font:12px/1.6 monospace;user-select:text}
+/* Fixed application shell; only bounded inner regions may scroll. */
+html,body{width:100%;height:100%;overflow:hidden}
+body{height:100dvh;display:flex;flex-direction:column;min-width:0}
+.topbar{height:62px;flex:0 0 62px;padding:0 20px;gap:16px;min-width:0}
+.topbar .brand{font-size:23px}
+.topbar form{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.workspace{position:relative;flex:1;min-height:0;min-width:0;width:100%;max-width:none;display:flex;gap:0;padding:0;overflow:hidden}
+.sidebar{flex:0 0 310px;width:310px;min-width:0;min-height:0;overflow-y:auto;overflow-x:hidden;padding:22px;border-right:1px solid #39443d;overscroll-behavior:contain}
+.sidebar .eyebrow{margin-bottom:14px}
+.bookmarks{margin-bottom:14px;padding-bottom:12px}
+#bookmarks-list{max-height:220px}
+.terminal-panel{flex:1;min-width:0;min-height:0;height:auto;border:0;border-radius:0;box-shadow:none;overflow:hidden}
+.session-toolbar{display:flex;align-items:center;gap:12px;min-width:0;flex:0 0 46px;background:#1c241e;border-bottom:1px solid #39443d;padding:0 12px}
+.session-toolbar>.quiet{flex-shrink:0;white-space:nowrap}
+#session-tabs{display:flex;flex:1;min-width:0;overflow:auto;gap:4px;align-self:stretch}
+.session-tab{display:flex;align-items:center;flex-shrink:0;max-width:260px;border-right:1px solid #39443d}
+.session-tab button{border:0;background:transparent;color:#8b9c90;padding:10px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.session-tab button[aria-selected=true]{color:#b5ed89;background:#b5ed8910}
+.session-tab button:first-child{min-width:0}
+.session-tab button:last-child{flex-shrink:0}
+.session-body{display:flex;flex:1;min-height:0;min-width:0;position:relative;overflow:hidden}
+.terminal-content{flex:1;min-width:0;min-height:0;padding:8px;overflow:hidden}
+#terminal{position:relative;width:100%;height:100%;overflow:hidden}
+.terminal-instance{height:100%;width:100%;overflow:hidden}
+#empty{z-index:1;pointer-events:none}
+.terminal-bar{min-width:0;gap:12px;flex:0 0 42px;height:42px}
+#session-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.terminal-footer{flex-shrink:0}
+#sftp-panel{display:flex;flex-direction:column;flex:0 0 320px;width:320px;min-width:0;min-height:0;border-left:1px solid #39443d;padding:16px;background:#1c241e;overflow:hidden}
+#sftp-panel h2{margin:0;font-size:17px}
+#sftp-panel label{margin-top:10px}
+#sftp-panel .secondary{padding:9px;margin-top:8px}
+#sftp-panel .upload{padding:10px;margin-bottom:0}
+#sftp-panel .hint{margin-bottom:0}
+#sftp-message{min-height:0;max-height:65px;overflow:auto;margin:8px 0;overflow-wrap:anywhere}
+#sftp-files{min-height:0;flex:1;overflow:auto;overscroll-behavior:contain}
+.file-entry{display:block;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid #333c35;color:#dbeadf;padding:11px 4px;overflow-wrap:anywhere;font-size:12px}
+.file-entry:hover{background:#b5ed8910}
+.sftp-actions{display:flex;gap:8px;align-items:baseline}
+.sftp-actions>*{flex:1;font-size:11px}
+@media(max-width:1100px){#sftp-panel{flex-basis:280px;width:280px}.sidebar{flex-basis:280px;width:280px;padding:16px}.top-caption{display:none}}
+@media(max-width:800px){.sidebar{position:absolute;inset:0 auto 0 0;z-index:5;width:min(310px,90vw);background:#191d1b;box-shadow:16px 0 40px #0006}.topbar{padding:0 12px;gap:8px}.topbar .brand{font-size:20px}.topbar .quiet{font-size:11px}#sftp-panel{position:absolute;inset:0 0 0 auto;z-index:4;width:min(320px,90%);box-shadow:-12px 0 30px #0006}.session-toolbar{gap:6px;padding:0 6px}.session-toolbar>.quiet{font-size:11px}.terminal-panel{min-height:0;height:auto}.workspace{padding:0}.terminal-bar{padding:0 10px}}
+@media(max-height:550px){.topbar{height:46px;flex-basis:46px}.session-toolbar{flex-basis:36px}.terminal-bar{flex-basis:32px;height:32px}.terminal-footer{padding:6px 10px}}

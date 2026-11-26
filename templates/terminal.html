@@ -1,0 +1,37 @@
+{% load static %}
+<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Relay — Remote terminal</title><link rel="stylesheet" href="{% static 'terminal.css' %}"></head>
+<body>
+<header class="topbar"><button id="toggle-menu" class="quiet" aria-expanded="true" aria-controls="connection-menu">☰ Подключения</button><a class="brand" href="/">▣ <span>relay<span class="accent">.</span></span></a><span class="top-caption">YOUR SERVERS. ONE TERMINAL.</span><form method="post" action="/logout/">{% csrf_token %}<button class="quiet" type="submit">{{ user.username }} ↗ Выйти</button></form></header>
+<main class="workspace">
+<aside class="sidebar" id="connection-menu">
+<div class="eyebrow">ПОДКЛЮЧЕНИЯ</div>
+<section class="bookmarks" aria-labelledby="bookmarks-title">
+<h2 id="bookmarks-title">Сохранённые подключения</h2>
+<button type="button" id="local-server" class="secondary">⌂ Этот сервер</button>
+<p class="hint">SSH к серверу приложения; нужны SSH-учётные данные.</p>
+<div id="bookmarks-list"></div>
+</section>
+<form id="connection-form">
+{% csrf_token %}
+<label for="host">Адрес сервера</label><div class="host-row"><input id="host" name="host" placeholder="192.168.1.10" required autocomplete="off"><input id="port" name="port" type="number" min="1" max="65535" value="22" aria-label="SSH порт" required></div>
+<label for="username">Пользователь</label><input id="username" name="username" placeholder="deploy" required autocomplete="off">
+<div class="tabs" role="group" aria-label="Способ входа"><button type="button" class="tab active" id="password-tab" aria-pressed="true">Пароль</button><button type="button" class="tab" id="key-tab" aria-pressed="false">SSH-ключ</button></div>
+<div id="key-fields" hidden><label class="upload" for="key">↥ <span id="key-name">Выберите приватный ключ</span><input id="key" type="file" hidden></label><p class="hint">OpenSSH / PEM · до 64 КБ</p><label class="save-key-option"><input id="save-key" type="checkbox"> Сохранить приватный ключ в закладке (зашифрованно)</label><p class="hint" id="saved-key-status"></p></div>
+<label for="password" id="password-label">Пароль</label><input id="password" type="password" autocomplete="off" placeholder="••••••••••••">
+<label for="bookmark-name">Название закладки</label><input id="bookmark-name" maxlength="100" placeholder="Например, Production">
+<button id="save-bookmark" class="secondary" type="button">☆ Сохранить подключение</button>
+<p class="hint">Сохранение ключа — только по вашему выбору. Пароли и парольные фразы не сохраняются.</p>
+<button id="connect" class="primary" type="submit">Подключиться <span>→</span></button><button id="disconnect" class="secondary" type="button" disabled>Отключиться</button>
+</form>
+<p id="message" class="message" role="status" aria-live="polite">Введите данные для нового подключения.</p>
+<div class="privacy"><span>◇</span><p>Пароли используются только для текущего SSH-сеанса. Сохранённые ключи зашифрованы в базе данных.</p></div>
+</aside>
+<section class="terminal-panel"><div class="session-toolbar"><div id="session-tabs" role="tablist" aria-label="Терминалы"></div><button id="new-session" class="quiet">+ Вкладка</button><button id="toggle-commands" class="quiet" aria-expanded="false">⚡ Команды</button><button id="toggle-sftp" class="quiet" aria-expanded="false">SFTP</button></div><div class="terminal-bar"><div class="dots"><i></i><i></i><i></i></div><span id="session-title">Новая сессия</span><span id="status" class="badge">OFFLINE</span></div><div class="session-body"><div class="terminal-content"><div id="empty"><div class="prompt-icon">&gt;_</div><h2>Ваш следующий шаг — здесь.</h2><p>Подключитесь к Linux-серверу,<br>чтобы открыть интерактивную оболочку.</p><span class="shortcut">SSH · xterm-256color</span></div><div id="terminal"></div></div><aside id="commands-panel" hidden aria-labelledby="commands-title"><h2 id="commands-title">Быстрые команды</h2><label for="command-search">Поиск по командам и категориям</label><input id="command-search" type="search" placeholder="Название, категория, команда"><button id="refresh-services" class="secondary">↻ Сервисы активного сервера</button><p class="hint">.service из /etc/systemd/system. Действия: статус, последние 150 строк логов, слежение за новыми записями.</p><p class="hint">Команды отправляются в активный терминал. Убедитесь, что оболочка готова к вводу. Остановка логов: Ctrl+C в терминале.</p><p id="commands-message" class="message" role="status"></p><div id="commands-list"></div><details class="command-editor"><summary>+ Добавить свою команду</summary><form id="command-form"><label for="command-category">Категория</label><input id="command-category" maxlength="80" value="Мои команды" required list="command-categories"><datalist id="command-categories"></datalist><label for="command-name">Название</label><input id="command-name" maxlength="100" required><label for="command-text">Команда (одна строка)</label><input id="command-text" maxlength="4096" autocomplete="off" required><button id="command-save" class="primary">Сохранить</button></form></details></aside><aside id="sftp-panel" hidden><h2>SFTP</h2><form id="sftp-form"><label for="sftp-path">Путь на сервере</label><input id="sftp-path" value="."><button class="secondary">Открыть / обновить</button></form><div class="sftp-actions"><button id="sftp-parent" class="secondary">↑ На уровень выше</button><label class="upload" for="sftp-upload">Загрузить файл<input id="sftp-upload" type="file" hidden></label></div><p class="hint">До 5 МиБ. Существующие файлы не перезаписываются.</p><p id="sftp-message" class="message" role="status"></p><div id="sftp-files"></div></aside></div><footer class="terminal-footer"><span>SSH / INTERACTIVE SHELL</span><span id="size">—</span></footer></section>
+</main>
+<dialog id="verify-dialog"><div class="eyebrow">ПРОВЕРКА СЕРВЕРА</div><h2>Доверять этому серверу?</h2><p>Сверьте SHA256-отпечаток с администратором через независимый канал. Не подтверждайте незнакомый отпечаток.</p><code id="fingerprint"></code><div class="dialog-actions"><button id="reject-host" class="secondary">Отмена</button><button id="trust-host" class="primary">Доверять и подключиться</button></div></dialog>
+<dialog id="preview-dialog" aria-labelledby="preview-title"><div class="preview-toolbar"><h2 id="preview-title">Предпросмотр</h2><button id="preview-close" class="secondary" type="button">Закрыть</button></div><p id="preview-note" class="hint"></p><pre id="preview-content" tabindex="0"></pre></dialog>
+{{ local_ssh|json_script:"local-ssh-config" }}
+<script type="module" src="{% static 'terminal.js' %}"></script>
+</body></html>
