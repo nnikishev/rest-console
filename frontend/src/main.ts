@@ -1,3 +1,5 @@
+import { formatBytes } from './format';
+import { transfer, transferIcons } from './sftp-transfer';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
@@ -13,6 +15,7 @@ import { initUsers } from './users';
 import './connections.css';
 import './navigation.css';
 import './connection-dialog.css';
+import './sftp-transfer.css';
 
 const el = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
 const connectionDialog = el<HTMLDialogElement>('connection-dialog');
@@ -79,7 +82,7 @@ function closeConnectionDialog() {
 }
 el('connection-dialog-close').onclick = closeConnectionDialog;
 connectionDialog.addEventListener('cancel', event => { event.preventDefault(); closeConnectionDialog(); });
-function fillConnection(connection: { host: string; port: number; username: string; auth_method?: string; name?: string; id?: number; has_key?: boolean; group?: number | null }, edit = false) {
+function fillConnection(connection: { host: string; port: number; username: string; auth_method?: string; name?: string; id?: number; has_key?: boolean; group?: number | null }, edit = false, show = true) {
   if (saving) return;
   el<HTMLSelectElement>('connection-group').value = String(connection.group || '');
   editingConnectionId = connection.id || null;
@@ -100,10 +103,55 @@ function fillConnection(connection: { host: string; port: number; username: stri
   el('saved-key-status').textContent = savedKeyId ? 'Ключ сохранён. Для замены в текущем сеансе выберите другой файл.' : '';
   el('key-name').textContent = savedKeyId ? 'Используется сохранённый ключ' : 'Выберите приватный ключ';
   setMode(connection.auth_method === 'key');
-  openConnectionDialog(edit);
-  message(savedKeyId ? 'Сервер выбран. Используется сохранённый ключ; укажите парольную фразу, если нужна.' : 'Сервер выбран. Укажите SSH-пароль или приватный ключ.');
-  (connection.username ? password : el<HTMLInputElement>('username')).focus();
+  if (show) {
+    openConnectionDialog(edit);
+    message(savedKeyId ? 'Сервер выбран. Используется сохранённый ключ; укажите парольную фразу, если нужна.' : 'Сервер выбран. Укажите SSH-пароль или приватный ключ.');
+    (connection.username ? password : el<HTMLInputElement>('username')).focus();
+  }
 }
+const authDialog = el<HTMLDialogElement>('connection-auth-dialog');
+let authConnection: SavedConnection | null = null;
+function connectSaved(connection: SavedConnection) {
+  if (saving || active.busy) return;
+  fillConnection(connection, false, false);
+  authConnection = connection;
+  if (connection.auth_method === 'key' && connection.has_key) {
+    form.requestSubmit();
+    return;
+  }
+  showConnectionAuth(connection);
+}
+function showConnectionAuth(connection: SavedConnection) {
+  el('connection-auth-message').textContent = '';
+  authConnection = connection;
+  el('connection-auth-title').textContent = `Подключение · ${connection.name}`;
+  el('connection-auth-target').textContent = `${connection.username}@${connection.host}:${connection.port}`;
+  el('connection-auth-key-fields').hidden = connection.auth_method !== 'key' || connection.has_key;
+  el('connection-auth-password-label').textContent = connection.auth_method === 'key' ? 'Парольная фраза (если есть)' : 'SSH-пароль';
+  el<HTMLInputElement>('connection-auth-password').value = '';
+  el<HTMLInputElement>('connection-auth-key').value = '';
+  if (!authDialog.open) authDialog.showModal();
+  el<HTMLInputElement>('connection-auth-password').focus();
+}
+function closeConnectionAuth() {
+  el<HTMLInputElement>('connection-auth-password').value = '';
+  el<HTMLInputElement>('connection-auth-key').value = '';
+  authDialog.close(); authConnection = null;
+}
+el('connection-auth-close').onclick = closeConnectionAuth;
+authDialog.addEventListener('cancel', event => { event.preventDefault(); closeConnectionAuth(); });
+el<HTMLFormElement>('connection-auth-form').onsubmit = event => {
+  event.preventDefault();
+  if (!authConnection || active.busy) return;
+  fillConnection(authConnection, false, false);
+  password.value = el<HTMLInputElement>('connection-auth-password').value;
+  const files = el<HTMLInputElement>('connection-auth-key').files;
+  if (files) key.files = files;
+  authDialog.close();
+  el<HTMLInputElement>('connection-auth-password').value = '';
+  el<HTMLInputElement>('connection-auth-key').value = '';
+  form.requestSubmit();
+};
 function filterBookmarks() {
   const query = el<HTMLInputElement>('bookmark-search').value.trim().toLocaleLowerCase();
   let found = 0;
@@ -184,7 +232,7 @@ async function loadBookmarks() {
     select.append(icon('plug'), title, detail);
     select.setAttribute('aria-label', `Подключиться к ${connection.name}`);
     select.disabled = saving;
-    select.onclick = () => fillConnection(connection);
+    select.onclick = () => connectSaved(connection);
     const remove = document.createElement('button');
     remove.type = 'button';
     remove.className = 'quiet';
@@ -377,6 +425,7 @@ el<HTMLInputElement>('remove-key').onchange = () => {
 form.onsubmit = async event => {
   event.preventDefault();
   if (saving || active.busy) return;
+  if (connectionDialog.open) authConnection = null;
   connectionAttempt = true;
   const session = active.connected ? newSession() : active;
   session.busy = true;
@@ -426,6 +475,7 @@ form.onsubmit = async event => {
         if (session.pending) session.pending.fingerprint = data.fingerprint;
         showVerification();
       } else if (data.type === 'connected') {
+        authConnection = null;
         connectionAttempt = false;
         if (connectionDialog.open) connectionDialog.close();
         session.pending = null; session.connected = true; session.busy = false;
@@ -438,6 +488,10 @@ form.onsubmit = async event => {
         session.pending = null; session.connected = false; session.busy = false;
         clearRequests(session);
         if (verifying === session) { verifying = null; dialog.close(); showVerification(); }
+        if (data.type === 'error' && authConnection && !connectionDialog.open) {
+          showConnectionAuth(authConnection);
+          el('connection-auth-message').textContent = data.message || 'Не удалось подключиться.';
+        }
         notice(session, data.message || 'Сессия завершена.', data.type === 'error');
       }
     };
@@ -451,6 +505,10 @@ form.onsubmit = async event => {
     ws.onerror = () => notice(session, 'Ошибка WebSocket. Проверьте авторизацию и подключение.', true);
   } catch (error) {
     session.pending = null; session.busy = false;
+    if (authConnection && !connectionDialog.open) {
+      showConnectionAuth(authConnection);
+      el('connection-auth-message').textContent = error instanceof Error ? error.message : 'Ошибка подключения.';
+    }
     notice(session, error instanceof Error ? error.message : 'Ошибка подключения.', true);
   }
 };
@@ -482,7 +540,7 @@ function sftpRequest(session: Session, data: Record<string, unknown>, type = 'sf
   return new Promise((resolve, reject) => {
     if (!session.connected) { reject(new Error('Сначала подключитесь к SSH.')); return; }
     const id = ++nextRequest;
-    const timer = window.setTimeout(() => { session.requests.delete(id); reject(new Error('Тайм-аут SFTP.')); }, 60000);
+    const timer = data.action === 'transfer_start' && data.mode === 'archive' ? 0 : window.setTimeout(() => { session.requests.delete(id); reject(new Error('Тайм-аут SFTP.')); }, 60000);
     session.requests.set(id, { resolve, reject, timer });
     send(session, { type, id, ...data });
   });
@@ -610,12 +668,28 @@ function renderFiles() {
   el('sftp-message').textContent = active.connected ? '' : 'Подключитесь к SSH для работы с файлами.';
   const list = el('sftp-files'); list.replaceChildren();
   const session = active;
+  el('sftp-file-count').textContent = `${session.files.length} объектов`;
+  el('sftp-server-name').textContent = session.connected ? session.title : 'Нет подключения';
+  if (!session.files.length) {
+    const empty = document.createElement('div'); empty.className = 'sftp-empty';
+    empty.append(icon('folder'));
+    const text = document.createElement('p'); text.textContent = session.connected ? 'В этом каталоге пока пусто' : 'Файлы появятся после подключения';
+    empty.append(text); list.append(empty);
+  }
   for (const file of session.files) {
     const row = document.createElement('div');
     row.className = 'file-row';
     const button = document.createElement('button');
     button.className = 'file-entry';
-    button.textContent = `${file.directory ? '📁' : '▤'} ${file.name}${file.directory ? '' : ` · ${file.size} Б`}`;
+    row.classList.toggle('is-directory', file.directory);
+    const badge = document.createElement('span'); badge.className = 'file-kind-icon'; badge.append(icon(file.directory ? 'folder' : 'file'));
+    const name = document.createElement('span'); name.className = 'file-name'; name.textContent = file.name;
+    button.append(badge, name);
+    button.title = file.directory ? `Открыть папку ${file.name}` : `Открыть файл ${file.name}`;
+    if (file.directory) { const arrow = icon('chevron-right'); arrow.classList.add('file-open-arrow'); button.append(arrow); }
+    const size = document.createElement('span'); size.className = 'file-size';
+    size.textContent = file.directory ? 'Папка' : formatBytes(file.size);
+    if (!file.directory) size.title = `${new Intl.NumberFormat('ru-RU').format(file.size)} Б`;
     button.disabled = !session.connected;
     const path = joinPath(session.path, file.name);
     button.onclick = () => {
@@ -632,17 +706,12 @@ function renderFiles() {
       download.disabled = true;
       sftpMessage(session, file.directory ? 'Создание ZIP (символические ссылки пропускаются)…' : 'Скачивание…');
       try {
-        const result = await sftpRequest(session, { action: file.directory ? 'archive' : 'download', path });
-        const bytes = Uint8Array.from(atob(result.content), char => char.charCodeAt(0));
-        const url = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
-        const link = document.createElement('a'); link.href = url; link.download = result.name;
-        document.body.append(link); link.click(); link.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        await transfer(data => sftpRequest(session, data), path, file.directory ? 'archive' : 'download');
         sftpMessage(session, file.directory ? 'ZIP скачан. Символические ссылки и специальные файлы пропущены.' : 'Файл скачан.');
       } catch (error) { sftpMessage(session, (error as Error).message); }
       finally { download.disabled = !session.connected; }
     };
-    row.append(button, download);
+    row.append(button, size, download);
     list.append(row);
   }
 }
@@ -661,21 +730,19 @@ el('toggle-sftp').onclick = () => {
 el<HTMLFormElement>('sftp-form').onsubmit = event => {
   event.preventDefault(); void listFiles(active, el<HTMLInputElement>('sftp-path').value);
 };
+el('sftp-reload').onclick = () => { if (active.connected) void listFiles(active); };
 el('sftp-parent').onclick = () => { void listFiles(active, joinPath(active.path, '..')); };
+el('sftp-upload-button').onclick = () => el<HTMLInputElement>('sftp-upload').click();
 el<HTMLInputElement>('sftp-upload').onchange = async event => {
   const input = event.target as HTMLInputElement;
   const file = input.files?.[0]; const session = active;
   input.value = '';
   if (!file) return;
-  if (file.size > 5 * 1024 * 1024) { sftpMessage(session, 'Максимальный размер файла — 5 МиБ.'); return; }
   if (!confirm(`Загрузить «${file.name}» в ${session.path}?`)) return;
   const path = joinPath(session.path, file.name);
   sftpMessage(session, 'Загрузка файла…');
   try {
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    let binary = '';
-    for (let i = 0; i < bytes.length; i += 32768) binary += String.fromCharCode(...bytes.subarray(i, i + 32768));
-    await sftpRequest(session, { action: 'upload', path, content: btoa(binary) });
+    await transfer(data => sftpRequest(session, data), path, 'upload', file);
     await listFiles(session);
   } catch (error) { sftpMessage(session, (error as Error).message); }
 };
@@ -825,6 +892,7 @@ el('toggle-monitor').onclick = () => {
 el('refresh-monitor').onclick = () => { void refreshMonitor(); };
 window.setInterval(() => { void refreshMonitor(); }, 5000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) void refreshMonitor(); });
+transferIcons();
 decorateIcons();
 initUsers(api);
 initGroups(api, loadBookmarks);
@@ -834,7 +902,7 @@ for (const [id, name, label] of [
   ['new-session', 'plus', 'Вкладка'], ['reset-connection', 'plus', 'Новое'],
   ['save-bookmark', 'save', 'Сохранить подключение'], ['disconnect', 'unplug', 'Отключить активную сессию'],
   ['refresh-monitor', 'refresh-cw', 'Обновить'], ['refresh-services', 'refresh-cw', 'Сервисы активного сервера'],
-  ['sftp-parent', 'folder-open', 'На уровень выше'], ['preview-close', 'x', 'Закрыть'],
+  ['sftp-parent', 'arrow-up', 'Вверх'], ['sftp-reload', 'refresh-cw', 'Обновить'], ['preview-close', 'x', 'Закрыть'],
 ] as const) actionIcon(el(id), name, label);
 newSession();
 loadCommands().catch(error => commandsMessage(active, error.message));

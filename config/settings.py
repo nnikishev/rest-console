@@ -69,5 +69,4 @@ SSH_KEY_ENCRYPTION_KEY = os.environ.get(
 SSH_ALLOWED_HOSTS = [
     h.strip() for h in os.environ.get("SSH_ALLOWED_HOSTS", "").split(",") if h.strip()
 ]
-LIMIT = 150 * 1024 * 1024
 PREVIEW_LIMIT = 1024 * 1024

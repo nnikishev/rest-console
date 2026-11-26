@@ -7,7 +7,8 @@ from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import MagicMock
 
-from .sftp import LIMIT, PREVIEW_LIMIT, directory_archive, operate
+from .sftp import PREVIEW_LIMIT, operate
+from .transfers import CHUNK_SIZE, Transfers, archive_directory
 
 
 class SftpTests(TestCase):
@@ -31,20 +32,22 @@ class SftpTests(TestCase):
         self.sftp.listdir_iter.side_effect = lambda path: iter(
             [folder, link] if path == "/root" else [file]
         )
-        self.sftp.open.return_value.__enter__.return_value.read.return_value = b"hi"
-        result = directory_archive(self.sftp, "/root")
-        with zipfile.ZipFile(io.BytesIO(base64.b64decode(result["content"]))) as archive:
+        self.sftp.open.return_value.__enter__.return_value.read.side_effect = [b"hi", b""]
+        output = io.BytesIO()
+        name, size = archive_directory(self.sftp, "/root", output)
+        with zipfile.ZipFile(output) as archive:
             self.assertEqual(archive.read("root/sub/a.txt"), b"hi")
             self.assertNotIn("root/link", archive.namelist())
-        self.assertEqual(result["name"], "root.zip")
+        self.assertEqual(name, "root.zip")
+        self.assertGreater(size, 0)
 
     def test_archive_limits_and_unsafe_names(self):
-        for name, size in (("../bad", 0), ("large", LIMIT + 1)):
+        for name, size in (("../bad", 0),):
             self.sftp.listdir_iter.return_value = [
                 SimpleNamespace(filename=name, st_mode=stat.S_IFREG, st_size=size)
             ]
             with self.assertRaises(ValueError):
-                directory_archive(self.sftp, "/root")
+                archive_directory(self.sftp, "/root", io.BytesIO())
 
     def test_save_checks_revision_before_writing(self):
         self.sftp.stat.return_value.st_mode = stat.S_IFREG
@@ -84,28 +87,81 @@ class SftpTests(TestCase):
         self.assertEqual(result["entries"][0]["name"], "folder")
 
     def test_upload_uses_exclusive_creation(self):
-        result = operate(
+        transfers = Transfers()
+        result = transfers.operate(
+            self.client,
+            {"action": "transfer_start", "mode": "upload", "path": "/tmp/new.txt", "size": 5},
+        )
+        transfers.operate(
             self.client,
             {
-                "action": "upload",
-                "path": "/tmp/new.txt",
+                "action": "transfer_chunk",
+                "token": result["token"],
                 "content": base64.b64encode(b"hello").decode(),
             },
         )
-        self.assertTrue(result["uploaded"])
-        self.sftp.open.assert_called_once_with("/tmp/new.txt", "wx")
-        self.sftp.open.return_value.__enter__.return_value.write.assert_called_once_with(b"hello")
+        transfers.operate(self.client, {"action": "transfer_finish", "token": result["token"]})
+        sftp = self.client.open_sftp.return_value
+        sftp.open.assert_called_once_with("/tmp/new.txt", "wx")
+        sftp.open.return_value.write.assert_called_once_with(b"hello")
 
-    def test_download_is_bounded(self):
-        remote = self.sftp.open.return_value.__enter__.return_value
-        remote.stat.return_value.st_size = 2
+    def test_download_large_file_uses_bounded_chunks(self):
+        transfers = Transfers()
+        sftp = self.client.open_sftp.return_value
+        sftp.normalize.return_value = "/tmp/a"
+        sftp.stat.return_value.st_mode = stat.S_IFREG
+        remote = sftp.open.return_value
+        remote.stat.return_value.st_size = 10 * 1024**3
         remote.read.return_value = b"hi"
-        result = operate(self.client, {"action": "download", "path": "/tmp/a"})
-        self.assertEqual(base64.b64decode(result["content"]), b"hi")
-        remote.read.assert_called_once_with(LIMIT + 1)
-        remote.stat.return_value.st_size = LIMIT + 1
+        result = transfers.operate(
+            self.client, {"action": "transfer_start", "mode": "download", "path": "/tmp/a"}
+        )
+        self.assertEqual(result["size"], 10 * 1024**3)
+        chunk = transfers.operate(
+            self.client, {"action": "transfer_chunk", "token": result["token"]}
+        )
+        self.assertEqual(base64.b64decode(chunk["content"]), b"hi")
+        remote.read.assert_called_once_with(CHUNK_SIZE)
+        transfers.shutdown()
+
+    def test_cancel_upload_removes_partial_file(self):
+        transfers = Transfers()
+        result = transfers.operate(
+            self.client,
+            {
+                "action": "transfer_start",
+                "mode": "upload",
+                "path": "/tmp/new",
+                "size": 10 * 1024**3,
+            },
+        )
+        transfers.operate(self.client, {"action": "transfer_cancel", "token": result["token"]})
+        self.client.open_sftp.return_value.remove.assert_called_once_with("/tmp/new")
+        self.assertFalse(transfers.items)
+
+    def test_invalid_chunk_cleans_up_upload(self):
+        transfers = Transfers()
+        result = transfers.operate(
+            self.client,
+            {"action": "transfer_start", "mode": "upload", "path": "/tmp/new", "size": 10},
+        )
         with self.assertRaises(ValueError):
-            operate(self.client, {"action": "download", "path": "/tmp/a"})
+            transfers.operate(
+                self.client,
+                {"action": "transfer_chunk", "token": result["token"], "content": "!!!"},
+            )
+        self.assertFalse(transfers.items)
+        self.client.open_sftp.return_value.remove.assert_called_once_with("/tmp/new")
+
+    def test_incomplete_upload_cannot_finish(self):
+        transfers = Transfers()
+        result = transfers.operate(
+            self.client,
+            {"action": "transfer_start", "mode": "upload", "path": "/tmp/new", "size": 10},
+        )
+        with self.assertRaises(ValueError):
+            transfers.operate(self.client, {"action": "transfer_finish", "token": result["token"]})
+        self.assertFalse(transfers.items)
 
     def test_invalid_paths_and_payloads(self):
         for path in ("", "a\0b", 123):

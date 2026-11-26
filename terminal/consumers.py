@@ -14,6 +14,7 @@ from .key_storage import decrypt_key
 from .models import SavedConnection
 from .monitoring import snapshot
 from .sftp import operate
+from .transfers import Transfers
 
 
 class HostConfirmationRequired(paramiko.SSHException):
@@ -37,6 +38,7 @@ class FingerprintPolicy(paramiko.MissingHostKeyPolicy):
 
 class TerminalConsumer(AsyncJsonWebsocketConsumer):
     async def connect(self):
+        self.transfers = Transfers()
         self.client = None
         self.channel = None
         self.reader = None
@@ -91,7 +93,12 @@ class TerminalConsumer(AsyncJsonWebsocketConsumer):
                 try:
                     if not self.client or not self.channel:
                         raise ValueError("Сначала подключитесь к SSH.")
-                    result = await asyncio.to_thread(operate, self.client, content)
+                    operation = (
+                        self.transfers.operate
+                        if str(content.get("action", "")).startswith("transfer_")
+                        else operate
+                    )
+                    result = await asyncio.to_thread(operation, self.client, content)
                     await self.send_json(
                         {"type": "sftp", "id": content.get("id"), "result": result}
                     )
@@ -104,7 +111,7 @@ class TerminalConsumer(AsyncJsonWebsocketConsumer):
                         {
                             "type": "sftp",
                             "id": content.get("id"),
-                            "error": "Операция SFTP не выполнена: проверьте путь, права, лимит 5 МиБ и отсутствие файла при загрузке.",
+                            "error": "Операция SFTP не выполнена: проверьте путь, права, свободное место и отсутствие файла при загрузке.",
                         }
                     )
             elif kind == "disconnect":
@@ -229,6 +236,7 @@ class TerminalConsumer(AsyncJsonWebsocketConsumer):
         except (OSError, EOFError, paramiko.SSHException):
             await self.send_json({"type": "closed"})
         finally:
+            await asyncio.to_thread(self.transfers.shutdown)
             if self.client:
                 self.client.close()
             self.channel = None
@@ -246,6 +254,7 @@ class TerminalConsumer(AsyncJsonWebsocketConsumer):
             except asyncio.CancelledError:
                 pass
         self.reader = None
+        await asyncio.to_thread(self.transfers.shutdown)
         if self.client:
             self.client.close()
         self.client = None
