@@ -1,0 +1,15 @@
+{% load static %}
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Relay — Новый пользователь</title><link rel="stylesheet" href="{% static 'terminal.css' %}"></head>
+<body class="account-page"><main class="account-card">
+<a class="brand" href="/">▣ relay<span class="accent">.</span></a>
+<a class="account-back" href="/">← Вернуться к терминалам</a>
+<div class="eyebrow">УПРАВЛЕНИЕ ДОСТУПОМ</div><h1>Новый пользователь</h1>
+<p class="subtitle">Отдельное рабочее пространство со своими серверами, SSH-ключами и быстрыми командами.</p>
+{% if created %}<p class="account-success" role="status">Пользователь создан. Он может войти на странице входа. Текущая учётная запись администратора не изменена.</p>{% endif %}
+<form method="post">{% csrf_token %}
+{{ form.non_field_errors }}
+{% for field in form %}<div class="account-field"><label for="{{ field.id_for_label }}">{{ field.label }}</label>{{ field }}{{ field.errors }}{% if field.help_text %}<div class="hint">{{ field.help_text|safe }}</div>{% endif %}</div>{% endfor %}
+<p class="hint">Создаётся обычный пользователь без административных прав. Передайте пароль по защищённому каналу. Это учётная запись Relay, а не пользователь Linux/SSH.</p>
+<button class="primary" type="submit">Создать пользователя →</button>
+</form></main></body></html>

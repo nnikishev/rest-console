@@ -6,6 +6,10 @@ import { clearHistory, renderDashboard } from './monitor-dashboard';
 import { FileEditor } from './file-editor';
 import './workspace.css';
 import './monitor-dashboard.css';
+import { icon, actionIcon, decorateIcons } from './icons';
+import { initUsers } from './users';
+import './connections.css';
+import './navigation.css';
 
 const el = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
 const form = el<HTMLFormElement>('connection-form');
@@ -50,7 +54,7 @@ async function api(path: string, method = 'GET', body?: unknown) {
   });
   if (!response.ok) {
     const data = await response.json().catch(() => ({}));
-    throw new Error(data.error || 'Не удалось выполнить действие. Проверьте поля и авторизацию.');
+    throw new Error(data.error ? `${data.error}${data.fields ? ' ' + Object.values(data.fields).flat().join(' ') : ''}` : 'Не удалось выполнить действие. Проверьте поля и авторизацию.');
   }
   return response.json();
 }
@@ -62,15 +66,49 @@ function fillConnection(connection: { host: string; port: number; username: stri
   el<HTMLInputElement>('username').value = connection.username;
   el<HTMLInputElement>('bookmark-name').value = connection.name || '';
   password.value = '';
+  password.type = 'password';
+  el('toggle-password').textContent = 'Показать';
+  el('toggle-password').setAttribute('aria-pressed', 'false');
+  el('toggle-password').setAttribute('aria-label', 'Показать пароль');
   key.value = '';
   savedKeyId = connection.has_key && connection.id ? connection.id : null;
   el<HTMLInputElement>('save-key').checked = false;
   el('saved-key-status').textContent = savedKeyId ? 'Ключ сохранён. Для замены в текущем сеансе выберите другой файл.' : '';
   el('key-name').textContent = savedKeyId ? 'Используется сохранённый ключ' : 'Выберите приватный ключ';
   setMode(connection.auth_method === 'key');
-  message('Параметры заполнены. Укажите пароль или приватный ключ и нажмите «Подключиться».');
+  message(savedKeyId ? 'Сервер выбран. Используется сохранённый ключ; укажите парольную фразу, если нужна.' : 'Сервер выбран. Укажите SSH-пароль или приватный ключ.');
   (connection.username ? password : el<HTMLInputElement>('username')).focus();
 }
+function filterBookmarks() {
+  const query = el<HTMLInputElement>('bookmark-search').value.trim().toLocaleLowerCase();
+  let found = 0;
+  document.querySelectorAll<HTMLElement>('.bookmark-row').forEach(row => {
+    row.hidden = !row.dataset.search!.includes(query);
+    if (!row.hidden) found++;
+  });
+  const empty = document.getElementById('bookmark-search-empty');
+  if (empty) empty.hidden = found > 0 || !query;
+}
+el('bookmark-search').oninput = filterBookmarks;
+el('reset-connection').onclick = () => {
+  if (saving) return;
+  if (active.connected || active.busy) newSession();
+  form.reset(); savedKeyId = null; password.type = 'password';
+  el('toggle-password').textContent = 'Показать';
+  el('toggle-password').setAttribute('aria-pressed', 'false');
+  el('toggle-password').setAttribute('aria-label', 'Показать пароль');
+  el('saved-key-status').textContent = '';
+  el('key-name').textContent = 'Выберите приватный ключ';
+  el<HTMLDetailsElement>('bookmark-options').open = false;
+  setMode(false); message('Новое подключение. Укажите адрес сервера и SSH-учётные данные.');
+  el<HTMLInputElement>('host').focus();
+};
+el('toggle-password').onclick = () => {
+  const visible = password.type === 'password'; password.type = visible ? 'text' : 'password';
+  el('toggle-password').textContent = visible ? 'Скрыть' : 'Показать';
+  el('toggle-password').setAttribute('aria-label', visible ? 'Скрыть пароль' : 'Показать пароль');
+  el('toggle-password').setAttribute('aria-pressed', String(visible));
+};
 async function loadBookmarks() {
   const data = await api('/api/connections/');
   const list = el('bookmarks-list');
@@ -84,6 +122,7 @@ async function loadBookmarks() {
   for (const connection of data.connections as SavedConnection[]) {
     const row = document.createElement('div');
     row.className = 'bookmark-row';
+    row.dataset.search = `${connection.name} ${connection.host} ${connection.username}`.toLocaleLowerCase();
     const select = document.createElement('button');
     select.type = 'button';
     select.className = 'bookmark-select';
@@ -97,7 +136,7 @@ async function loadBookmarks() {
     const remove = document.createElement('button');
     remove.type = 'button';
     remove.className = 'quiet';
-    remove.textContent = '×';
+    remove.append(icon('trash-2'));
     remove.setAttribute('aria-label', `Удалить закладку ${connection.name}`);
     remove.onclick = async () => {
       if (!window.confirm(`Удалить закладку «${connection.name}»?`)) return;
@@ -108,6 +147,9 @@ async function loadBookmarks() {
     row.append(select, remove);
     list.append(row);
   }
+  const emptySearch = document.createElement('p'); emptySearch.id = 'bookmark-search-empty';
+  emptySearch.className = 'hint'; emptySearch.textContent = 'Серверы не найдены.'; list.append(emptySearch);
+  filterBookmarks();
 }
 for (const id of ['host', 'port', 'username']) {
   el(id).addEventListener('input', () => {
@@ -157,14 +199,14 @@ function render() {
     button.setAttribute('aria-selected', String(session === active));
     button.onclick = () => activate(session);
     const close = document.createElement('button');
-    close.textContent = '×';
+    close.append(icon('x'));
     close.setAttribute('aria-label', `Закрыть ${session.title}`);
     close.onclick = () => closeSession(session);
     row.append(button, close);
     el('session-tabs').append(row);
   }
   connect.disabled = active.busy;
-  connect.firstChild!.textContent = active.connected ? 'Подключить в новой вкладке ' : 'Подключиться ';
+  actionIcon(connect, 'plug', active.connected ? 'Подключить в новой вкладке' : 'Подключиться');
   disconnect.disabled = !active.connected;
   el('status').textContent = active.connected ? 'CONNECTED' : active.busy ? 'CONNECTING' : 'OFFLINE';
   el('status').classList.toggle('online', active.connected);
@@ -278,6 +320,10 @@ form.onsubmit = async event => {
     if (!sessions.includes(session)) return;
     session.pending = payload;
     password.value = '';
+    password.type = 'password';
+    el('toggle-password').textContent = 'Показать';
+    el('toggle-password').setAttribute('aria-pressed', 'false');
+    el('toggle-password').setAttribute('aria-label', 'Показать пароль');
     key.value = '';
     el<HTMLInputElement>('save-key').checked = false;
     session.socket?.close();
@@ -347,7 +393,7 @@ function reject() {
 el('reject-host').onclick = reject;
 dialog.addEventListener('cancel', event => { event.preventDefault(); reject(); });
 disconnect.onclick = () => send(active, { type: 'disconnect' });
-el('new-session').onclick = () => { newSession(); setMenu(true); };
+el('new-session').onclick = () => { newSession(); el('nav-connections').click(); setMenu(true); };
 function setMenu(open: boolean) {
   el('connection-menu').hidden = !open;
   el('toggle-menu').setAttribute('aria-expanded', String(open));
@@ -502,7 +548,8 @@ function renderFiles() {
     };
     const download = document.createElement('button');
     download.className = 'file-download quiet';
-    download.textContent = '↓ Скачать';
+    download.append(icon('download'));
+    download.title = file.directory ? 'Скачать каталог как ZIP' : 'Скачать файл';
     download.setAttribute('aria-label', `Скачать ${file.name}${file.directory ? ' как ZIP' : ''}`);
     download.disabled = !session.connected;
     download.onclick = async () => {
@@ -612,7 +659,7 @@ function renderCommands() {
       };
       row.append(run);
       if (command.id !== undefined) {
-        const remove = document.createElement('button'); remove.className = 'quiet'; remove.textContent = '×';
+        const remove = document.createElement('button'); remove.className = 'quiet'; remove.append(icon('trash-2'));
         remove.setAttribute('aria-label', `Удалить команду ${command.name}`);
         remove.onclick = async () => {
           if (!confirm(`Удалить команду «${command.name}»?`)) return;
@@ -702,6 +749,16 @@ el('toggle-monitor').onclick = () => {
 el('refresh-monitor').onclick = () => { void refreshMonitor(); };
 window.setInterval(() => { void refreshMonitor(); }, 5000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) void refreshMonitor(); });
+decorateIcons();
+initUsers(api);
+for (const [id, name, label] of [
+  ['toggle-menu', 'menu', 'Меню'], ['toggle-monitor', 'activity', 'Мониторинг'],
+  ['toggle-commands', 'zap', 'Команды'], ['toggle-sftp', 'folder-open', 'SFTP'],
+  ['new-session', 'plus', 'Вкладка'], ['reset-connection', 'plus', 'Новое'],
+  ['save-bookmark', 'save', 'Сохранить подключение'], ['disconnect', 'unplug', 'Отключить активную сессию'],
+  ['refresh-monitor', 'refresh-cw', 'Обновить'], ['refresh-services', 'refresh-cw', 'Сервисы активного сервера'],
+  ['sftp-parent', 'folder-open', 'На уровень выше'], ['preview-close', 'x', 'Закрыть'],
+] as const) actionIcon(el(id), name, label);
 newSession();
 loadCommands().catch(error => commandsMessage(active, error.message));
 new ResizeObserver(resize).observe(el('terminal'));

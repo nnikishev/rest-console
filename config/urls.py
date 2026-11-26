@@ -2,8 +2,12 @@ from django.contrib.auth import views as auth_views
 from django.urls import path
 
 from terminal import views
+from terminal.user_management import users
 
 urlpatterns = [
+    path("api/users/", users),
+    path("api/users/<int:pk>/", users),
+    path("users/new/", views.create_user),
     path("", views.terminal_page),
     path("api/quick-commands/", views.quick_commands),
     path("api/quick-commands/<int:pk>/", views.delete_quick_command),

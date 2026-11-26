@@ -2,13 +2,39 @@ import json
 
 from django import forms
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
+from django.contrib.auth.forms import UserCreationForm
+from django.core.exceptions import PermissionDenied
 from django.http import JsonResponse
-from django.shortcuts import get_object_or_404, render
+from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_http_methods
 
 from .key_storage import encrypt_key
 from .models import QuickCommand, SavedConnection
+
+
+class ApplicationUserForm(UserCreationForm):
+    class Meta(UserCreationForm.Meta):
+        model = get_user_model()
+        fields = ("username",)
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def create_user(request):
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    form = ApplicationUserForm(request.POST if request.method == "POST" else None)
+    if request.method == "POST" and form.is_valid():
+        user = form.save(commit=False)
+        user.is_staff = False
+        user.is_superuser = False
+        user.save()
+        return redirect("/users/new/?created=1")
+    return render(
+        request, "create_user.html", {"form": form, "created": request.GET.get("created") == "1"}
+    )
 
 
 class QuickCommandForm(forms.ModelForm):
